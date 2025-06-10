@@ -1,6 +1,7 @@
 // generator.cpp - AST to C++ generator
 #include "generator.hpp"
 #include "ast.hpp"
+#include "type_system.hpp"
 #include <sstream>
 #include <unordered_set>
 #include <string>
@@ -43,7 +44,50 @@ static void gen_stmt(std::ostringstream& out, const std::shared_ptr<Statement>& 
             out << " << \"" << escape_string(say->end) << "\";\n";
     }
     else if (auto set = dynamic_cast<SetStatement*>(stmt.get())) {
-        out << ind << "auto " << set->var << " = 0;\n";
+        TypeChecker type_checker;
+        
+        std::string cpp_type = "auto";
+        if (!set->type_annotation.empty()) {
+            auto type_info = type_checker.parse_type_annotation(set->type_annotation);
+            if (type_info.has_value()) {
+                cpp_type = type_info->to_cpp_type();
+            }
+        }
+        
+        std::string default_value = "0";
+        if (!set->initial_value.empty()) {
+            if (set->type_annotation.find("text") != std::string::npos) {
+                default_value = "\"" + escape_string(set->initial_value) + "\"";
+            } else if (set->type_annotation.find("number") != std::string::npos) {
+                default_value = set->initial_value; // No quotes for numbers
+            } else if (set->type_annotation.find("truth") != std::string::npos) {
+                default_value = set->initial_value; // true/false literals
+            } else {
+                // Try to infer from value
+                auto inferred_type = type_checker.infer_literal_type(set->initial_value);
+                if (inferred_type.base_type == HerType::Number) {
+                    default_value = set->initial_value;
+                } else if (inferred_type.base_type == HerType::Truth) {
+                    default_value = set->initial_value;
+                } else {
+                    default_value = "\"" + escape_string(set->initial_value) + "\"";
+                }
+            }
+        } else if (!set->type_annotation.empty()) {
+            // Set default values based on type
+            if (set->type_annotation.find("text") != std::string::npos) {
+                default_value = "\"\"";
+            } else if (set->type_annotation.find("number") != std::string::npos) {
+                default_value = "0";
+            } else if (set->type_annotation.find("truth") != std::string::npos) {
+                default_value = "false";
+            }
+            if (set->type_annotation.find("?") != std::string::npos) {
+                default_value = "std::nullopt"; // For nullable types
+            }
+        }
+        
+        out << ind << cpp_type << " " << set->var << " = " << default_value << ";\n";
     }
     else if (auto func = dynamic_cast<FunctionDef*>(stmt.get())) {
         if (!func->param.empty()) {
@@ -90,7 +134,7 @@ static void gen_stmt(std::ostringstream& out, const std::shared_ptr<Statement>& 
 
 std::string generate_cpp(const AST& ast) {
     std::ostringstream out;
-    out << "#include <iostream>\n#include <string>\n\n#ifdef _WIN32\n#include <windows.h>\n#endif\n\n";
+    out << "#include <iostream>\n#include <string>\n#include <optional>\n\n#ifdef _WIN32\n#include <windows.h>\n#endif\n\n";
 
     for (auto& stmt : ast.statements) {
         if (dynamic_cast<FunctionDef*>(stmt.get())) {
