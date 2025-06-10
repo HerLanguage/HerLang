@@ -1,9 +1,10 @@
-// main.cpp - Entry point for MyLangCompiler
+// main.cpp - Entry point for HerLangCompiler
 #include "lexer.hpp"
 #include "parser.hpp"
 #include "generator.hpp"
 #include "warnings.hpp"
 #include "utils.hpp"
+#include "error_system.hpp"
 #include <fstream>
 #include <iostream>
 
@@ -22,10 +23,11 @@ int main(int argc, char* argv[]) {
     std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     input.close();
 
-    check_indentation(source); // Check for indentation warnings
+    try {
+        check_indentation(source); // Check for indentation warnings
 
-    auto lines = split_lines(source);
-    auto tokens = lex(lines);
+        auto lines = split_lines(source);
+        auto tokens = lex(lines);
 #if _DEBUG
     std::cerr << "=== Tokens ===\n";
     for (const auto& tok : tokens) {
@@ -77,9 +79,20 @@ int main(int argc, char* argv[]) {
         std::cerr << "Cannot write to output file: " << argv[2] << "\n";
         return 1;
     }
-    output << cpp_code;
-    output.close();
+        output << cpp_code;
+        output.close();
 
-    std::cout << "Compilation successful: " << argv[2] << "\n";
-    return 0;
+        std::cout << "🌸 Compilation successful: " << argv[2] << "\n";
+        std::cout << "💝 Your HerLang code has been transformed into C++!\n";
+        return 0;
+    }
+    catch (const HerLangError& e) {
+        ErrorReporter::report_with_support(e);
+        return 1;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "🌸 Unexpected error: " << e.what() << "\n";
+        std::cerr << "💝 Please report this issue to help improve HerLang!\n";
+        return 1;
+    }
 }

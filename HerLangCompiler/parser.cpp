@@ -1,6 +1,7 @@
 // parser.cpp - MyLang parser implementation
 #include "parser.hpp"
 #include "utils.hpp"
+#include "error_system.hpp"
 #include <stdexcept>
 #include <iostream>
 
@@ -81,7 +82,10 @@ std::vector<std::shared_ptr<Statement>> parse_block() {
             break;
         }
         if (current.type == TokenType::EOFToken) {
-            throw std::runtime_error("Unexpected end of file inside block.");
+            throw HerLangError(HerLangError::Type::SyntaxError, 
+                "Unexpected end of file inside block", current.line)
+                .with_suggestion("Add 'end' statement to close the block")
+                .with_context("Looking for block terminator");
         }
 
         auto stmt = parse_statement();
@@ -93,7 +97,11 @@ std::vector<std::shared_ptr<Statement>> parse_block() {
         }
 
         if (++safety_counter > 10000) {
-            throw std::runtime_error("Too many statements parsed without encountering 'end'");
+            throw HerLangError(HerLangError::Type::SyntaxError,
+                "Block parsing exceeded safety limit - possible infinite loop")
+                .with_suggestion("Check for missing 'end' statement")
+                .with_suggestion("Verify proper block structure")
+                .with_context("Safety limit prevents infinite parsing");
         }
     }
 
@@ -126,7 +134,10 @@ std::shared_ptr<Statement> parse_statement() {
             param = maybe_param_or_colon.value;
             colon = advance();
             if (colon.value != ":") {
-                throw std::runtime_error("Expected ':' after parameter in function definition");
+                throw HerLangError(HerLangError::Type::SyntaxError,
+                    "Expected ':' after parameter in function definition", colon.line)
+                    .with_suggestion("Add a colon (:) after the parameter name")
+                    .with_context("Parsing function definition");
             }
         }
 
@@ -138,7 +149,12 @@ std::shared_ptr<Statement> parse_statement() {
     if (tok.type == TokenType::Keyword && tok.value == "start") {
         advance();
         Token colon = advance();
-        if (colon.value != ":") throw std::runtime_error("Expected ':' after start");
+        if (colon.value != ":") {
+            throw HerLangError(HerLangError::Type::SyntaxError,
+                "Expected ':' after start", colon.line)
+                .with_suggestion("Add a colon (:) after 'start'")
+                .with_context("Parsing start block");
+        }
         auto body = parse_block();
         return std::make_shared<StartBlock>(body);
     }
@@ -162,13 +178,19 @@ std::shared_ptr<Statement> parse_statement() {
 
                 Token eq = peek();
                 if (eq.type != TokenType::Symbol || eq.value != "=") {
-                    throw std::runtime_error("Expected '=' after 'end'");
+                    throw HerLangError(HerLangError::Type::SyntaxError,
+                        "Expected '=' after 'end'", eq.line)
+                        .with_suggestion("Use 'end = \"string\"' to specify output ending")
+                        .with_context("Parsing say statement with custom ending");
                 }
                 advance(); // consume '='
 
                 Token val = peek();
                 if (val.type != TokenType::StringLiteral) {
-                    throw std::runtime_error("Expected string literal after end=");
+                    throw HerLangError(HerLangError::Type::TypeError,
+                        "Expected string literal after end=", val.line)
+                        .with_suggestion("Use quotes around the ending string: end = \"your_ending\"")
+                        .with_context("Setting custom output ending");
                 }
                 ending = advance().value;
 
@@ -193,22 +215,59 @@ std::shared_ptr<Statement> parse_statement() {
                 }
             }
             else {
-                throw std::runtime_error("Unexpected token in 'say': " + next.value);
+                throw HerLangError(HerLangError::Type::UnexpectedToken,
+                    "Unexpected token in 'say': " + next.value, next.line)
+                    .with_suggestion("Use string literals in quotes or variable names")
+                    .with_suggestion("Separate multiple arguments with commas")
+                    .with_context("Parsing say statement arguments");
             }
         }
 
         if (args.size() != is_vars.size()) {
-            throw std::runtime_error("Internal error: say args/vars mismatch.");
+            throw HerLangError(HerLangError::Type::RuntimeError,
+                "Internal parser error: argument type mismatch")
+                .with_suggestion("This is a compiler bug - please report it")
+                .with_context("Internal consistency check failed");
         }
 
         return std::make_shared<SayStatement>(args, is_vars, ending);
     }
 
-    // set
-    if (tok.type == TokenType::Keyword && tok.value == "set") {
-        advance();
+    // set or var
+    if ((tok.type == TokenType::Keyword && tok.value == "set") || 
+        (tok.type == TokenType::Keyword && tok.value == "var")) {
+        advance(); // consume 'set' or 'var'
         Token var = advance();
-        return std::make_shared<SetStatement>(var.value);
+        
+        std::string type_annotation = "";
+        std::string initial_value = "";
+        
+        // Check for type annotation: var name: type
+        Token next = peek();
+        if (next.type == TokenType::Symbol && next.value == ":") {
+            advance(); // consume ':'
+            Token type_token = peek();
+            if (type_token.type == TokenType::Keyword) {
+                type_annotation = advance().value;
+                
+                // Check for nullable type: type?
+                Token nullable = peek();
+                if (nullable.type == TokenType::Symbol && nullable.value == "?") {
+                    advance(); // consume '?'
+                    type_annotation += "?";
+                }
+            }
+        }
+        
+        // Check for initialization: = value
+        next = peek();
+        if (next.type == TokenType::Symbol && next.value == "=") {
+            advance(); // consume '='
+            Token value_token = advance();
+            initial_value = value_token.value;
+        }
+        
+        return std::make_shared<SetStatement>(var.value, type_annotation, initial_value);
     }
 
     // function call
